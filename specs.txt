@@ -1,0 +1,16 @@
+grafana: -refresh 5s (SELECT query + grafic)
+         -
+
+metrics_inserter: - T=5s
+                  - 4 contoare -> T set param contor = 1.25s
+                  - DMED121: 4 param T=312.5ms, mediere pe 5 valori T=62.5ms, 5 reincercari T=12.5ms
+                  - trifazat: 12 param T=104.1(6)ms, mediere 5 valori T=20.8(3)ms, 3 reincercari T=6.9(4)ms
+										   2 reincercari T=10.41(6)ms
+sau
+
+metrics_inserter: - Tinserare=5s
+		  - mediere pe 5 valori -> T set valori = 1s
+                  - 4 contoare -> T set param contor = 250ms
+		  - 1 DMED121: 4 param;        T=100ms
+                  - 3 trifazat: 12 param;      T=300ms
+		  - 40 param total -> Tparam=25ms ↑, 3 reincercari T=8.(3)ms
