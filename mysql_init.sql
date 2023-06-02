@@ -1,4 +1,6 @@
-
+DROP DATABASE IF EXISTS EnergyMeter_metrics;
+CREATE DATABASE EnergyMeter_metrics;
+USE EnergyMeter_metrics;
 
 CREATE USER 'testuser1'@'localhost' IDENTIFIED BY 'maisuchili';
 GRANT ALL ON *.* TO 'testuser1'@'localhost';
@@ -13,12 +15,13 @@ CREATE USER 'grafanauser'@'localhost' IDENTIFIED BY 'NiceGraphs-1234';
 GRANT SELECT ON EnergyMeter_metrics.* TO 'grafanauser'@'localhost';
 
 
-CREATE DATABASE EnergyMeter_metrics;
-USE EnergyMeter_metrics;
-
-CREATE TABLE monophase1_V(
+CREATE TABLE monophase1(
 	id SMALLINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
-	value DECIMAL(7,2) NOT NULL,
+	current DECIMAL(10,3) NOT NULL,
+	Pactive DECIMAL(10,2) NOT NULL,
+	Preactive DECIMAL(10,2) NOT NULL,
+	Papparent DECIMAL(10,2) NOT NULL,
+	voltage DECIMAL(10,2),
 	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -29,55 +32,15 @@ CREATE TABLE lastinsertids(
 );
 
 
-/* nu merge
 DELIMITER //
-CREATE TRIGGER limitDBrecords BEFORE INSERT ON monophase1_V FOR EACH ROW
-BEGIN
-	DECLARE N SMALLINT;
-	SELECT COUNT(*) FROM monophase1_V INTO N;
-	IF (N>=10) THEN
-		DELETE FROM monophase1_V WHERE id=new.id-N;
-	END IF;
-END//
-DELIMITER ;
-*/
-
-/* nici asa nu merge, nu pot fi modificate decat valorile old, new din randul afectat de
-   actiunea care a invocat trigger ul
-DELIMITER //
-CREATE TRIGGER limitDBrecords AFTER INSERT ON monophase1_V FOR EACH ROW
-BEGIN
-	DECLARE N SMALLINT;
-	SELECT COUNT(*) FROM monophase1_V INTO N;
-	IF (N>=11) THEN
-		DELETE FROM monophase1_V WHERE id=new.id-N+1;
-	END IF;
-END//
-DELIMITER ;
-*/
-
-/* nu se poate scala din cauza LAST_INSERT_ID()
-DELIMITER //
-CREATE PROCEDURE insert1_V(IN val INT)
-BEGIN
-	DECLARE N SMALLINT;
-	SELECT COUNT(*) FROM monophase1_V INTO N;
-	IF(N>=10) THEN
-	DELETE FROM monophase1_V WHERE id = LAST_INSERT_ID() - N + 1;
-	END IF;
-	INSERT INTO monophase1_V (value) VALUES (val);
-END//
-DELIMITER ;
-*/
-
-DELIMITER //
-CREATE PROCEDURE insert1_V(IN val DECIMAL(9,2))
+CREATE PROCEDURE insert_em1(IN I DECIMAL(13,3), IN Pa DECIMAL(12,2), IN Q DECIMAL(12,2), IN V DECIMAL(12,2))
 BEGIN
 	DECLARE lastid SMALLINT;
-	SELECT lid FROM lastinsertids WHERE tablename = 'monophase1_V' INTO lastid;
-	DELETE FROM monophase1_V WHERE id = lastid-50+1;
-	INSERT INTO monophase1_V (value) VALUES (val/100);
-	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'monophase1_V';
+	SELECT lid FROM lastinsertids WHERE tablename = 'monophase1' INTO lastid;
+	DELETE FROM monophase1 WHERE id = lastid-50+1;
+	INSERT INTO monophase1 (current,Pactive,Preactive,Papparent,voltage) VALUES
+	(I/1000, Pa/100, Q/100, SQRT(POW(Pa/100,2)+POW(Q/100,2)), V/100);
+	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'monophase1';
 END//
 DELIMITER ;
 
