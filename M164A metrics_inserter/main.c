@@ -5,8 +5,8 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : Transceiver interface
-Version : 0.8
-Date    : 11.01.2023
+Version : 0.85
+Date    : 21.01.2022
 Author  : popag93
 Company : 
 Comments: queries the meter, computes mean on 5s from 5 values
@@ -309,7 +309,7 @@ struct DMED121{
     unsigned long int I;    //current
     unsigned long int P;    //active power
     unsigned long int Q;    //reactive power
-    unsigned long int S;    //apparent power
+    unsigned long int V;    //apparent power
 };
 
 char time0;    //time0 sw timer - 125 steps; hw timer 125 steps, 64 prescaler -> 64/20000*125*125=50ms
@@ -352,15 +352,15 @@ interrupt [TIM1_COMPA] void timer1_compa_isr(void)
 
 char cr=0, *ct;
 char msg[40], errmsg[24];
+struct DMED121 c1;                //measurement set for energymeter 1
 void senderr(flash const char *error)
 {
     strcpyf(errmsg,error);
-    LED1=1;
     for(ct=errmsg; *ct; ct++)
         putchar0(*ct);
     return;
 }
-void sendmsg()
+inline void sendmsg()
 {
     transceiver_datadir=1;
     LED1=1;
@@ -368,22 +368,102 @@ void sendmsg()
         putchar1(*ct);
     return;
 }
-void sendqry()
+void sendqry()    //make it inline if there's enough program memory
 {
     for(ct=msg; *ct; ct++)
         putchar0(*ct);
     return;
 }
 
+char rsp[64], Nrsp;    //Nrsp - rsp[] after last element index (==length)
+char LRC, i=0;    //LRC - longitudinal checksum <=> checksum8 2's complement
+unsigned long int val;
+char ask_listen_validate(const unsigned int addr)
+{
+    sendmsg();
+            
+    start_timer0();
+            
+    while(!rx_counter1)    //wait first char, timeout time0
+        if(time0 == 125)
+        {
+            senderr("#fail1\r\n");
+            return 1;
+        }
+    cr=getchar1();
+    *rsp=cr;
+    Nrsp=1;
+    while(cr!='\n')        //like Linux canonical serial com + timeout
+    {
+        if(time0 == 125)
+        {
+            senderr("#fail2\r\n");
+            return 1;
+        }
+        if(rx_counter1)
+        {
+            cr=getchar1();
+            rsp[Nrsp++]=cr;
+        }
+    }
+    rsp[Nrsp++]='\0';
+            
+    stop_timer0();
+    #asm("wdr");
+            
+            
+    for(i=0;  Nrsp-i>19 && rsp[i]!=':';  i++);    //ignore leading noise
+    if(Nrsp-i != 20)                              //without leading noise, 20B response expected (including '\0', begins with ':'
+    {
+        senderr("#fail3\r\n");
+        return 1;
+    }
+    
+    switch(addr)
+    {
+    case 1:
+        if(strncmpf(rsp,":01",3))
+            return 1;
+        break;
+    case 2:
+        if(strncmpf(rsp,":02",3))
+            return 1;
+        break;
+    case 3:
+        if(strncmpf(rsp,":03",3))
+            return 1;
+        break;
+    case 4:
+        if(strncmpf(rsp,":04",3))
+            return 1;
+        break;
+    default:
+        return 1;
+    }
+    LRC = -addr;
+            
+    if(strncmpf(rsp+3, "0304", 4))
+        return 1;
+    LRC -= 7;
+            
+    sscanf(rsp+7,"%8lx",&val);
+    LRC -= (val>>24) + (val>>16) + (val>>8) + val;
+            
+    sscanf_2hhx(rsp+15, &cr);
+    if(LRC != cr)
+    {
+        senderr("#LRCfail");
+        return 1;
+    }
+    
+    #asm("wdr");
+    return 0;    //'\r' before last char test ignored
+}
 
 void main(void)
 {
-    char rsp[64], Nrsp;    //Nrsp - rsp[] after last element index (==length)
-    char LRC;
-    unsigned char i=0, iretry, ic1=0, ic2=0, ic3=0, ic4=0;
-    struct DMED121 c1;                //measurement set for energymeter 1
+    unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0;
     unsigned int time1;
-    unsigned long int val;
     
     initController();
     memset(&c1, 0, sizeof(struct DMED121));
@@ -397,9 +477,10 @@ void main(void)
 param_set1:
         start_timer1();
         #asm("wdr");        
-        strcpyf(msg, ":010300010002F9\r\n");    //:010300070002F3\r\n
+        strcpyf(msg, ":010300070002F3\r\n");    //:010300070002F3\r\n
         for(iretry=0; iretry<3; iretry++)
         {
+            /* older code
             sendmsg();
             
             start_timer0();
@@ -407,7 +488,7 @@ param_set1:
             while(!rx_counter1)    //wait first char, timeout time0
                 if(time0 == 125)
                 {
-                    senderr("fail1\r\n");
+                    senderr("fail1");
                     goto failed_q1;
                 }
             cr=getchar1();
@@ -456,43 +537,99 @@ param_set1:
                 senderr("#LRCfail");
                 goto failed_q1;
             }
-            c1.I += val/5;
-            break;    //'\r' before last char test ignored 
-            
-failed_q1:  #asm("wdr");
-            senderr("#retry_q1");
+            */
+            if(!ask_listen_validate(1))
+            {
+                c1.I += val/5;
+                break;
+            } 
+            else
+            {
+failed_q1:      #asm("wdr");
+                senderr("#retry_q1\n");
+            }
         }
         if(iretry==3)
         {
-            senderr("#failed_q1->c1_fail");
+            senderr("#failed_q1->c1_fail\n");
             ic1=0;
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
             goto param_set2;
         }
-        /*
-        strcpyf(msg,"");
-        for(iretry=0; iretry<4; iretry++)
+        
+        strcpyf(msg,":010300130002E7\r\n");
+        for(iretry=0; iretry<3; iretry++)
         {
-            ;
+            if(!ask_listen_validate(1))
+            {
+                c1.P += val/5;
+                break;
+            } 
+            else
+            {
+failed_q2:      #asm("wdr");
+                senderr("#retry_q2\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q2->c1_fail\n");
+            ic1=0;
+            memset(&c1,0,sizeof(struct DMED121));    //clear param_set
+            goto param_set2;
         }
         
-        strcpyf(msg,"");
-        for(iretry=0; iretry<4; iretry++)
+        strcpyf(msg,":010300190002E1\r\n");
+        for(iretry=0; iretry<3; iretry++)
         {
-            ;
+            if(!ask_listen_validate(1))
+            {
+                c1.Q += val/5;
+                break;
+            } 
+            else
+            {
+failed_q3:      #asm("wdr");
+                senderr("#retry_q3\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q3->c1_fail\n");
+            ic1=0;
+            memset(&c1,0,sizeof(struct DMED121));    //clear param_set
+            goto param_set2;
         }
         
-        strcpyf(msg,"");
-        for(iretry=0; iretry<4; iretry++)
+        strcpyf(msg,":010300010002F9\r\n");
+        for(iretry=0; iretry<3; iretry++)
         {
-            ;
+            if(!ask_listen_validate(1))
+            {
+                c1.V += val/5;
+                break;
+            } 
+            else
+            {
+failed_q4:      #asm("wdr");
+                senderr("#retry_q4\n");
+            }
         }
-        */
+        if(iretry==3)
+        {
+            senderr("#failed_q4->c1_fail\n");
+            ic1=0;
+            memset(&c1,0,sizeof(struct DMED121));    //clear param_set
+            goto param_set2;
+        }
+        
+        
         if(++ic1==5)    // 5 values acquired, insert obtained mean
         {
             strcpyf(msg,"CALL insert_em1(");
             sendqry();
-            sprintf(msg,"%ld,%ld,%ld,%ld);", c1.I, c1.P, c1.Q, c1.S);
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld);\n", c1.I, c1.P, c1.Q, c1.V);
             sendqry();
             ic1=0;
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
@@ -501,7 +638,28 @@ failed_q1:  #asm("wdr");
         
         
 param_set2:
-        ;        
+        /*strcpyf(msg,"");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.I += val/5;
+                break;
+            } 
+            else
+            {
+failed_q5:      #asm("wdr");
+                senderr("#retry_q5");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q5->c2_fail");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }*/        
+                
 
 param_set3:
         ;
@@ -515,8 +673,8 @@ param_set4:
             #asm("wdr");
         }
         while (time1 != 0xB71A);*/
-        while(time1= TCNT1L|(TCNT1H<<8),  time1 != 0xB71A)    #asm("wdr");    //param_setx acquisition should take no less than 12s
-        //while(TCNT1L != OCR1AL  ||  TCNT1H != OCR1AH)    #asm("wdr");    //param_setx acquisition should take no less than 12s
+        while(time1= TCNT1L|(TCNT1H<<8),  time1 != 0xB71A)    #asm("wdr");    //param_set1...4 acquisition should take no less than 12s
+        //while(TCNT1L != OCR1AL  ||  TCNT1H != OCR1AH)    #asm("wdr");    //param_set1...4 acquisition should take no less than 12s
         
         if(rx_buffer_overflow1)
         {
