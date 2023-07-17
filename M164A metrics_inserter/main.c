@@ -5,8 +5,8 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : Transceiver interface
-Version : 0.85
-Date    : 21.01.2022
+Version : 0.9
+Date    : 16.02.2023
 Author  : popag93
 Company : 
 Comments: queries the meter, computes mean on 5s from 5 values
@@ -30,7 +30,6 @@ Data Stack size         : 256
 void initController();
 
 //static const char hextable[] = {[0...255]=-1, ['0']=0,1,2,3,4,5,6,7,8,9, ['A']=10,11,12,13,14,15, ['a']=10,11,12,13,14,15};
-//normally I would use flash storage
 flash const char hextable[] = {
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
     -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -306,13 +305,27 @@ void putchar1(char c)
 
 struct DMED121{
     // long int in CVAVR C Compiler is int32_t, int is int16_t
-    unsigned long int I;    //current
-    unsigned long int P;    //active power
-    unsigned long int Q;    //reactive power
-    unsigned long int V;    //apparent power
+    unsigned long int I;
+    unsigned long int P;
+    unsigned long int Q;
+    unsigned long int V;
+};
+struct DMED301{
+    unsigned long int I1;    //current
+    unsigned long int I2;
+    unsigned long int I3;
+    unsigned long int P1;    //active power
+    unsigned long int P2;
+    unsigned long int P3;
+    unsigned long int Q1;    //reactive power
+    unsigned long int Q2;
+    unsigned long int Q3;
+    unsigned long int S1;    //apparent power
+    unsigned long int S2;
+    unsigned long int S3;
 };
 
-char time0;    //time0 sw timer - 125 steps; hw timer 125 steps, 64 prescaler -> 64/20000*125*125=50ms
+volatile char time0;    //time0 sw timer - 125 steps; hw timer 125 steps, 64 prescaler -> 64/20000*125*125=50ms
 inline void start_timer0()
 {
     time0=0;
@@ -349,10 +362,10 @@ interrupt [TIM1_COMPA] void timer1_compa_isr(void)
 }
 
 
-
+// convention:  msg - Modbus request;    rsp - Modbus response
 char cr=0, *ct;
 char msg[40], errmsg[24];
-struct DMED121 c1;                //measurement set for energymeter 1
+//struct DMED121 c1;                //measurement set for energymeter 1
 void senderr(flash const char *error)
 {
     strcpyf(errmsg,error);
@@ -365,7 +378,10 @@ inline void sendmsg()
     transceiver_datadir=1;
     LED1=1;
     for(ct=msg; *ct; ct++)
+    {
         putchar1(*ct);
+        //putchar0(*ct);    //uncomment for debug
+    }
     return;
 }
 void sendqry()    //make it inline if there's enough program memory
@@ -378,78 +394,97 @@ void sendqry()    //make it inline if there's enough program memory
 char rsp[64], Nrsp;    //Nrsp - rsp[] after last element index (==length)
 char LRC, i=0;    //LRC - longitudinal checksum <=> checksum8 2's complement
 unsigned long int val;
-char ask_listen_validate(const unsigned int addr)
+char ask_listen_validate(const unsigned char addr)
 {
-    sendmsg();
-            
+    char *rsp0;    //local variable for rsp
+
+    delay_ms(3);
     start_timer0();
+    sendmsg();
+    
             
     while(!rx_counter1)    //wait first char, timeout time0
         if(time0 == 125)
         {
-            senderr("#fail1\r\n");
+            senderr("#fail1");
             return 1;
         }
     cr=getchar1();
+    //putchar0(cr);    //uncomment for debug
     *rsp=cr;
     Nrsp=1;
     while(cr!='\n')        //like Linux canonical serial com + timeout
     {
         if(time0 == 125)
         {
-            senderr("#fail2\r\n");
+            senderr("#fail2");
             return 1;
         }
         if(rx_counter1)
         {
             cr=getchar1();
+            //putchar0(cr);    //uncomment for debug
             rsp[Nrsp++]=cr;
         }
     }
     rsp[Nrsp++]='\0';
-            
-    stop_timer0();
+    
+    while(rx_counter1)    getchar1();    //empty rx1 buffer
+    TCCR0B=0;    //stop_timer0();
     #asm("wdr");
-            
-            
+    
+    
     for(i=0;  Nrsp-i>19 && rsp[i]!=':';  i++);    //ignore leading noise
-    if(Nrsp-i != 20)                              //without leading noise, 20B response expected (including '\0', begins with ':'
+    if(Nrsp-i != 20)                              //without leading noise, 20B response expected (including '\0', begins with ':')
     {
-        senderr("#fail3\r\n");
+        senderr("#fail3");
         return 1;
     }
+    rsp0=rsp+i;
     
     switch(addr)
     {
     case 1:
-        if(strncmpf(rsp,":01",3))
+        if(strncmpf(rsp0,":01",3))
+        {
+            senderr("#fail4");
             return 1;
+        }
         break;
     case 2:
-        if(strncmpf(rsp,":02",3))
+        if(strncmpf(rsp0,":02",3))
+        {
+            senderr("#fail4");
             return 1;
+        }
         break;
     case 3:
-        if(strncmpf(rsp,":03",3))
+        if(strncmpf(rsp0,":03",3))
+        {
+            senderr("#fail4");
             return 1;
+        }
         break;
     case 4:
-        if(strncmpf(rsp,":04",3))
+        if(strncmpf(rsp0,":04",3))
+        {
+            senderr("#fail4");
             return 1;
+        }
         break;
     default:
         return 1;
     }
     LRC = -addr;
             
-    if(strncmpf(rsp+3, "0304", 4))
+    if(strncmpf(rsp0+3, "0304", 4))
         return 1;
     LRC -= 7;
             
-    sscanf(rsp+7,"%8lx",&val);
+    sscanf(rsp0+7,"%8lx",&val);
     LRC -= (val>>24) + (val>>16) + (val>>8) + val;
             
-    sscanf_2hhx(rsp+15, &cr);
+    sscanf_2hhx(rsp0+15, &cr);
     if(LRC != cr)
     {
         senderr("#LRCfail");
@@ -464,10 +499,15 @@ void main(void)
 {
     unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0;
     unsigned int time1;
+    struct DMED121 c1;                //measurement set for energymeter 1
+    struct DMED301 c2, c3, c4;        //measurement sets for energymeters 2-4
     
     initController();
     memset(&c1, 0, sizeof(struct DMED121));
-    //memset(c2, 0,...
+    memset(&c2, 0, sizeof(struct DMED301));
+    memset(&c3, 0, sizeof(struct DMED301));
+    memset(&c4, 0, sizeof(struct DMED301));
+    
     // Globally enable interrupts
     #asm("sei")
     senderr("#reset\r\n");
@@ -480,64 +520,6 @@ param_set1:
         strcpyf(msg, ":010300070002F3\r\n");    //:010300070002F3\r\n
         for(iretry=0; iretry<3; iretry++)
         {
-            /* older code
-            sendmsg();
-            
-            start_timer0();
-            
-            while(!rx_counter1)    //wait first char, timeout time0
-                if(time0 == 125)
-                {
-                    senderr("fail1");
-                    goto failed_q1;
-                }
-            cr=getchar1();
-            *rsp=cr;
-            Nrsp=1;
-            while(cr!='\n')        //like Linux canonical serial com + timeout
-            {
-                if(time0 == 125)
-                {
-                    senderr("fail2\r\n");
-                    goto failed_q1;
-                }
-                if(rx_counter1)
-                {
-                    cr=getchar1();
-                    rsp[Nrsp++]=cr;
-                }
-            }
-            rsp[Nrsp++]='\0';
-            
-            stop_timer0();
-            #asm("wdr");
-            
-            
-            for(i=0;  Nrsp-i>20 && rsp[i]!=':';  i++);    //ignore leading noise
-            if(Nrsp-i != 20)                              //without leading noise, 20B response expected (including '\0', begins with ':'
-            {
-                senderr("fail3\r\n");
-                goto failed_q1;
-            }
-            
-            if(strncmpf(rsp, ":01", 3))
-                continue;
-            LRC = -1;
-            
-            if(strncmpf(rsp+3, "0304", 4))
-                goto failed_q1;
-            LRC -= 7;
-            
-            sscanf(rsp+7,"%8lx",&val);
-            LRC -= (val>>24) + (val>>16) + (val>>8) + val;
-            
-            sscanf_2hhx(rsp+15, &cr);
-            if(LRC != cr)
-            {
-                senderr("#LRCfail");
-                goto failed_q1;
-            }
-            */
             if(!ask_listen_validate(1))
             {
                 c1.I += val/5;
@@ -638,35 +620,862 @@ failed_q4:      #asm("wdr");
         
         
 param_set2:
-        /*strcpyf(msg,"");
+        strcpyf(msg,":020300070002F2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
             if(!ask_listen_validate(2))
             {
-                c2.I += val/5;
+                c2.I1 += val/5;
                 break;
             } 
             else
             {
 failed_q5:      #asm("wdr");
-                senderr("#retry_q5");
+                senderr("#retry_q5\n");
             }
         }
         if(iretry==3)
         {
-            senderr("#failed_q5->c2_fail");
+            senderr("#failed_q5->c2_fail\n");
             ic2=0;
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
-        }*/        
-                
-
-param_set3:
-        ;
-
-param_set4:
-        ;
+        }
         
+        strcpyf(msg,":020300090002F0\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.I2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q6:      #asm("wdr");
+                senderr("#retry_q6\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q6->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":0203000B0002EE\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.I3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q7:      #asm("wdr");
+                senderr("#retry_q7\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q7->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300130002E6\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.P1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q8:      #asm("wdr");
+                senderr("#retry_q8\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q8->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300150002E4\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.P2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q9:      #asm("wdr");
+                senderr("#retry_q9\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q9->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300170002E2\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.P3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q10:     #asm("wdr");
+                senderr("#retry_q10\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q10->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300190002E0\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.Q1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q11:     #asm("wdr");
+                senderr("#retry_q11\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q11->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":0203001B0002DE\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.Q2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q12:     #asm("wdr");
+                senderr("#retry_q12\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q12->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":0203001D0002DC\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.Q3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q13:     #asm("wdr");
+                senderr("#retry_q13\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q13->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":0203001F0002DA\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.S1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q14:     #asm("wdr");
+                senderr("#retry_q14\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q14->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300210002D8\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.S2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q15:     #asm("wdr");
+                senderr("#retry_q15\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q15->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        strcpyf(msg,":020300230002D6\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(2))
+            {
+                c2.S3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q16:     #asm("wdr");
+                senderr("#retry_q16\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q16->c2_fail\n");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set3;
+        }
+        
+        
+        
+        if(++ic2==5)    // 5 values acquired, insert obtained mean
+        {
+            sprintf(msg,"CALL insert_em2(%ld,%ld,", c2.I1, c2.I2);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c2.I3, c2.P1, c2.P2, c2.P3);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c2.Q1, c2.Q2, c2.Q3, c2.S1);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld);\n", c2.S2, c2.S3);
+            sendqry();
+            #asm("wdr");
+            ic2=0;
+            memset(&c2,0,sizeof(struct DMED301));    //clear param_set
+        }
+        
+        
+param_set3:
+        strcpyf(msg,":030300070002F1\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.I1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q17:     #asm("wdr");
+                senderr("#retry_q17\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q17->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300090002EF\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.I2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q18:     #asm("wdr");
+                senderr("#retry_q18\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q18->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":0303000B0002ED\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.I3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q19:     #asm("wdr");
+                senderr("#retry_q19\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q19->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300130002E5\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.P1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q20:     #asm("wdr");
+                senderr("#retry_q20\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q20->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300150002E3\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.P2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q21:     #asm("wdr");
+                senderr("#retry_q21\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q21->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300170002E1\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.P3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q22:     #asm("wdr");
+                senderr("#retry_q22\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q22->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300190002DF\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.Q1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q23:     #asm("wdr");
+                senderr("#retry_q23\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q23->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":0303001B0002DD\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.Q2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q24:     #asm("wdr");
+                senderr("#retry_q24\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q24->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":0303001D0002DB\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.Q3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q25:     #asm("wdr");
+                senderr("#retry_q25\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q25->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":0303001F0002D9\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.S1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q26:     #asm("wdr");
+                senderr("#retry_q26\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q26->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300210002D7\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.S2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q27:     #asm("wdr");
+                senderr("#retry_q27\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q27->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        strcpyf(msg,":030300230002D5\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(3))
+            {
+                c3.S3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q28:     #asm("wdr");
+                senderr("#retry_q28\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q28->c3_fail\n");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+            goto param_set4;
+        }
+        
+        
+        
+        if(++ic3==5)    // 5 values acquired, insert obtained mean
+        {
+            sprintf(msg,"CALL insert_em3(%ld,%ld,", c3.I1, c3.I2);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c3.I3, c3.P1, c3.P2, c3.P3);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c3.Q1, c3.Q2, c3.Q3, c3.S1);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld);\n", c3.S2, c3.S3);
+            sendqry();
+            #asm("wdr");
+            ic3=0;
+            memset(&c3,0,sizeof(struct DMED301));    //clear param_set
+        }
+        
+        
+param_set4:
+        strcpyf(msg,":040300070002F0\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.I1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q29:     #asm("wdr");
+                senderr("#retry_q29\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q29->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300090002EE\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.I2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q30:     #asm("wdr");
+                senderr("#retry_q30\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q30->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":0403000B0002EC\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.I3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q31:     #asm("wdr");
+                senderr("#retry_q31\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q31->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300130002E4\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.P1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q32:     #asm("wdr");
+                senderr("#retry_q32\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q32->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300150002E2\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.P2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q33:     #asm("wdr");
+                senderr("#retry_q33\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q33->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300170002E0\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.P3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q34:     #asm("wdr");
+                senderr("#retry_q34\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q34->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300190002DE\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.Q1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q35:     #asm("wdr");
+                senderr("#retry_q35\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q35->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":0403001B0002DC\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.Q2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q36:     #asm("wdr");
+                senderr("#retry_q36\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q36->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":0403001D0002DA\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.Q3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q37:     #asm("wdr");
+                senderr("#retry_q37\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q37->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":0403001F0002D8\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.S1 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q38:     #asm("wdr");
+                senderr("#retry_q38\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q38->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300210002D6\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.S2 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q39:     #asm("wdr");
+                senderr("#retry_q39\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q39->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        strcpyf(msg,":040300230002D4\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate(4))
+            {
+                c4.S3 += val/5;
+                break;
+            } 
+            else
+            {
+failed_q40:     #asm("wdr");
+                senderr("#retry_q40\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q40->c4_fail\n");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+        
+        
+        if(++ic4==5)    // 5 values acquired, insert obtained mean
+        {
+            sprintf(msg,"CALL insert_em4(%ld,%ld,", c4.I1, c4.I2);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c4.I3, c4.P1, c4.P2, c4.P3);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld,%ld,%ld,", c4.Q1, c4.Q2, c4.Q3, c4.S1);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%ld,%ld);\n", c4.S2, c4.S3);
+            sendqry();
+            #asm("wdr");
+            ic4=0;
+            memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+        }
+
+end_acquisition_cycle:
         /*do
         {
             time1 = TCNT1L | (TCNT1H<<8);
@@ -678,7 +1487,7 @@ param_set4:
         
         if(rx_buffer_overflow1)
         {
-            senderr("RX1_buffer_overflow");
+            senderr("#RX1_buffer_overflow");
             rx_buffer_overflow1 = 0;
         }
     }

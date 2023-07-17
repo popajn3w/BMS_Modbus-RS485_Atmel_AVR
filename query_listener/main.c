@@ -132,8 +132,23 @@ int main()
     }//}
 
 
-    //{//initialize the table with DB_Nrecords
+    //{//initialize the tables with DB_Nrecords
     if(mysql_query(con, "DELETE FROM monophase1"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+    if(mysql_query(con, "DELETE FROM triphase2"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+    if(mysql_query(con, "DELETE FROM triphase3"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+    if(mysql_query(con, "DELETE FROM triphase4"))
     {
         fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
         exit(4);
@@ -154,6 +169,54 @@ int main()
         }
     }
     if(mysql_query(con, "INSERT INTO lastinsertids (tablename,lid) VALUES ('monophase1',LAST_INSERT_ID())"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+
+    for(num_bytes=0; num_bytes<DB_Nrecords; num_bytes++)
+    {
+        if(mysql_query(con, "INSERT INTO triphase2 (current1,current2,current3,Pactive1,Pactive2,Pactive3,"
+                       "Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) "
+                       "VALUES (0,0,0,0,0,0,0,0,0,0,0,0)"))
+        {
+            fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+            exit(4);
+        }
+    }
+    if(mysql_query(con, "INSERT INTO lastinsertids (tablename,lid) VALUES ('triphase2',LAST_INSERT_ID())"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+
+    for(num_bytes=0; num_bytes<DB_Nrecords; num_bytes++)
+    {
+        if(mysql_query(con, "INSERT INTO triphase3 (current1,current2,current3,Pactive1,Pactive2,Pactive3,"
+                       "Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) "
+                       "VALUES (0,0,0,0,0,0,0,0,0,0,0,0)"))
+        {
+            fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+            exit(4);
+        }
+    }
+    if(mysql_query(con, "INSERT INTO lastinsertids (tablename,lid) VALUES ('triphase3',LAST_INSERT_ID())"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
+
+    for(num_bytes=0; num_bytes<DB_Nrecords; num_bytes++)
+    {
+        if(mysql_query(con, "INSERT INTO triphase4 (current1,current2,current3,Pactive1,Pactive2,Pactive3,"
+                       "Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) "
+                       "VALUES (0,0,0,0,0,0,0,0,0,0,0,0)"))
+        {
+            fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+            exit(4);
+        }
+    }
+    if(mysql_query(con, "INSERT INTO lastinsertids (tablename,lid) VALUES ('triphase4',LAST_INSERT_ID())"))
     {
         fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
         exit(4);
