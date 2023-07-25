@@ -4,13 +4,15 @@ Automatic Program Generator
 © Copyright 1998-2019 Pavel Haiduc, HP InfoTech s.r.l.
 http://www.hpinfotech.com
 
-Project : Transceiver interface
-Version : 0.9
-Date    : 16.02.2023
+Project : metrics_inserter_uC
+Version : 1.0
+Date    : 6.03.2023
 Author  : popag93
 Company : 
 Comments: queries the meter, computes mean on 5s from 5 values
-          and sends MySQL queries on USART0 to insert metrics
+          and sends MySQL queries on USART0 to insert metrics;
+          queries the custom Modbus slave to actuate the relays
+          according to the switches
 
 Chip type               : ATmega164A
 Program type            : Application
@@ -495,9 +497,66 @@ char ask_listen_validate(const unsigned char addr)
     return 0;    //'\r' before last char test ignored
 }
 
+char ask_listen_validate2()
+{
+    char *rsp0;    //local variable for rsp
+
+    delay_ms(3);
+    start_timer0();
+    sendmsg();
+    
+            
+    while(!rx_counter1)    //wait first char, timeout time0
+        if(time0 == 125)
+        {
+            senderr("#fail1");
+            return 1;
+        }
+    cr=getchar1();
+    //putchar0(cr);    //uncomment for debug
+    *rsp=cr;
+    Nrsp=1;
+    while(cr!='\n')        //like Linux canonical serial com + timeout
+    {
+        if(time0 == 125)
+        {
+            senderr("#fail2");
+            return 1;
+        }
+        if(rx_counter1)
+        {
+            cr=getchar1();
+            //putchar0(cr);    //uncomment for debug
+            rsp[Nrsp++]=cr;
+        }
+    }
+    rsp[Nrsp++]='\0';
+    
+    while(rx_counter1)    getchar1();    //empty rx1 buffer
+    TCCR0B=0;    //stop_timer0();
+    #asm("wdr");
+    
+    for(i=0;  Nrsp-i>17 && rsp[i]!=':';  i++);    //ignore leading noise
+    if(Nrsp-i != 18)                              //without leading noise, 18B response expected (including '\0', begins with ':')
+    {
+        senderr("#fail3");
+        return 1;
+    }
+    rsp0=rsp+i;
+    
+    if(strncmp(msg,rsp0,17))
+    {
+        senderr("#fail5");
+        return 1;
+    }
+    return 0;
+}
+
 void main(void)
 {
     unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0;
+    unsigned char pinA=255, pinB=255, pinC=255;    //stable, decided relay states
+    unsigned char pinAbak, pinBbak, pinCbak, LRC_TX;
     unsigned int time1;
     struct DMED121 c1;                //measurement set for energymeter 1
     struct DMED301 c2, c3, c4;        //measurement sets for energymeters 2-4
@@ -1211,7 +1270,7 @@ failed_q29:     #asm("wdr");
             senderr("#failed_q29->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300090002EE\r\n");
@@ -1233,7 +1292,7 @@ failed_q30:     #asm("wdr");
             senderr("#failed_q30->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":0403000B0002EC\r\n");
@@ -1255,7 +1314,7 @@ failed_q31:     #asm("wdr");
             senderr("#failed_q31->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300130002E4\r\n");
@@ -1277,7 +1336,7 @@ failed_q32:     #asm("wdr");
             senderr("#failed_q32->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300150002E2\r\n");
@@ -1299,7 +1358,7 @@ failed_q33:     #asm("wdr");
             senderr("#failed_q33->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300170002E0\r\n");
@@ -1321,7 +1380,7 @@ failed_q34:     #asm("wdr");
             senderr("#failed_q34->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300190002DE\r\n");
@@ -1343,7 +1402,7 @@ failed_q35:     #asm("wdr");
             senderr("#failed_q35->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":0403001B0002DC\r\n");
@@ -1365,7 +1424,7 @@ failed_q36:     #asm("wdr");
             senderr("#failed_q36->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":0403001D0002DA\r\n");
@@ -1387,7 +1446,7 @@ failed_q37:     #asm("wdr");
             senderr("#failed_q37->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":0403001F0002D8\r\n");
@@ -1409,7 +1468,7 @@ failed_q38:     #asm("wdr");
             senderr("#failed_q38->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300210002D6\r\n");
@@ -1431,7 +1490,7 @@ failed_q39:     #asm("wdr");
             senderr("#failed_q39->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         strcpyf(msg,":040300230002D4\r\n");
@@ -1453,7 +1512,7 @@ failed_q40:     #asm("wdr");
             senderr("#failed_q40->c4_fail\n");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
-            goto end_acquisition_cycle;
+            goto set_relays;
         }
         
         
@@ -1473,6 +1532,67 @@ failed_q40:     #asm("wdr");
             #asm("wdr");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
+        }
+        
+set_relays:
+        if(pinA!=PINA || pinB!=PINB)
+        {
+            delay_ms(30);    //debounce switch
+        
+            if(pinA!=PINA || pinB!=PINB)
+            {
+                pinAbak=pinA;
+                pinBbak=pinB;
+                pinA=PINA;
+                pinB=PINB;
+                LRC_TX= -0x05 -0x06 -pinA -pinB;
+                sprintf(msg, ":05060000%02X%02X%02X\r\n", pinA,pinB,LRC_TX);
+                
+                for(iretry=0; iretry<3; iretry++)
+                {
+                    if(!ask_listen_validate2())
+                        break;
+                    else
+                    {
+failed_q41:             #asm("wdr");
+                        senderr("#retry_q41\n");
+                    }
+                }
+                if(iretry==3)
+                {
+                    senderr("#failed_q41->c5_fail\n");
+                    pinA=pinAbak;    //revert changes
+                    pinB=pinBbak;
+                }
+            }
+        }
+        if(pinC!=PINC)
+        {
+            delay_ms(30);    //debounce switch
+        
+            if(pinC!=PINC)
+            {
+                pinCbak=pinC;
+                pinC=PINC;
+                LRC_TX= -0x05 -0x06 -0x01 -pinC -0xFF;
+                sprintf(msg, ":05060001%02XFF%02X\r\n", pinC,LRC_TX);
+            
+                for(iretry=0; iretry<3; iretry++)
+                {
+                    if(!ask_listen_validate2())
+                        break;
+                    else
+                    {
+failed_q42:             #asm("wdr");
+                        senderr("#retry_q42\n");
+                    }
+                }
+                if(iretry==3)
+                {
+                    senderr("#failed_q42->c5_fail\n");
+                    pinC=pinCbak;    //revert changes
+                }
+            }
         }
 
 end_acquisition_cycle:

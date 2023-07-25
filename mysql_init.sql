@@ -76,22 +76,13 @@ CREATE TABLE triphase4(
 	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE lastinsertids(
-	id TINYINT PRIMARY KEY AUTO_INCREMENT,
-	tablename VARCHAR(255) NOT NULL UNIQUE,
-	lid SMALLINT NOT NULL
-);
-
 
 DELIMITER //
 CREATE PROCEDURE insert_em1(IN I DECIMAL(13,3), IN Pa DECIMAL(12,2), IN Q DECIMAL(12,2), IN V DECIMAL(12,2))
 BEGIN
-	DECLARE lastid SMALLINT;
-	SELECT lid FROM lastinsertids WHERE tablename = 'monophase1' INTO lastid;
-	DELETE FROM monophase1 WHERE id = lastid-50+1;
 	INSERT INTO monophase1 (current,Pactive,Preactive,Papparent,voltage) VALUES
 	(I/1000, Pa/100, Q/100, SQRT(POW(Pa/100,2)+POW(Q/100,2)), V/100);
-	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'monophase1';
+	DELETE FROM monophase1 WHERE id = LAST_INSERT_ID() -50;
 END//
 DELIMITER ;
 
@@ -101,14 +92,11 @@ CREATE PROCEDURE insert_em2(IN I1 DECIMAL(14,4), IN I2 DECIMAL(14,4), IN I3 DECI
                             IN Q1 DECIMAL(12,2), IN Q2 DECIMAL(12,2), IN Q3 DECIMAL(12,2),
                             IN S1 DECIMAL(12,2), IN S2 DECIMAL(12,2), IN S3 DECIMAL(12,2))
 BEGIN
-	DECLARE lastid SMALLINT;
-	SELECT lid FROM lastinsertids WHERE tablename = 'triphase2' INTO lastid;
-	DELETE FROM triphase2 WHERE id = lastid-50+1;
 	INSERT INTO triphase2 (current1,current2,current3,Pactive1,Pactive2,Pactive3,
 	Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) VALUES
 	(I1/10000, I2/10000, I3/10000, Pa1/100, Pa2/100, Pa3/100,
 	Q1/100, Q2/100, Q3/100, S1/100, S2/100, S3/100);
-	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'triphase2';
+	DELETE FROM triphase2 WHERE id = LAST_INSERT_ID() -50;
 END//
 DELIMITER ;
 
@@ -118,14 +106,11 @@ CREATE PROCEDURE insert_em3(IN I1 DECIMAL(14,4), IN I2 DECIMAL(14,4), IN I3 DECI
                             IN Q1 DECIMAL(12,2), IN Q2 DECIMAL(12,2), IN Q3 DECIMAL(12,2),
                             IN S1 DECIMAL(12,2), IN S2 DECIMAL(12,2), IN S3 DECIMAL(12,2))
 BEGIN
-	DECLARE lastid SMALLINT;
-	SELECT lid FROM lastinsertids WHERE tablename = 'triphase3' INTO lastid;
-	DELETE FROM triphase3 WHERE id = lastid-50+1;
 	INSERT INTO triphase3 (current1,current2,current3,Pactive1,Pactive2,Pactive3,
 	Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) VALUES
 	(I1/10000, I2/10000, I3/10000, Pa1/100, Pa2/100, Pa3/100,
 	Q1/100, Q2/100, Q3/100, S1/100, S2/100, S3/100);
-	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'triphase3';
+	DELETE FROM triphase3 WHERE id = LAST_INSERT_ID() -50;
 END//
 DELIMITER ;
 
@@ -135,14 +120,11 @@ CREATE PROCEDURE insert_em4(IN I1 DECIMAL(14,4), IN I2 DECIMAL(14,4), IN I3 DECI
                             IN Q1 DECIMAL(12,2), IN Q2 DECIMAL(12,2), IN Q3 DECIMAL(12,2),
                             IN S1 DECIMAL(12,2), IN S2 DECIMAL(12,2), IN S3 DECIMAL(12,2))
 BEGIN
-	DECLARE lastid SMALLINT;
-	SELECT lid FROM lastinsertids WHERE tablename = 'triphase4' INTO lastid;
-	DELETE FROM triphase4 WHERE id = lastid-50+1;
 	INSERT INTO triphase4 (current1,current2,current3,Pactive1,Pactive2,Pactive3,
 	Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) VALUES
 	(I1/10000, I2/10000, I3/10000, Pa1/100, Pa2/100, Pa3/100,
 	Q1/100, Q2/100, Q3/100, S1/100, S2/100, S3/100);
-	UPDATE lastinsertids SET lid=LAST_INSERT_ID() WHERE tablename = 'triphase4';
+	DELETE FROM triphase4 WHERE id = LAST_INSERT_ID() -50;
 END//
 DELIMITER ;
 
