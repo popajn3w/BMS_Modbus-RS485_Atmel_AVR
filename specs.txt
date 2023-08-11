@@ -1,10 +1,28 @@
-grafana: -refresh 5s (SELECT query + grafic)
+grafana: -refresh 12s (SELECT query + grafic)
          -
 
+metrics_inserter: - 1 DMED121: 4 param;              T=200ms
+                  - 3 trifazat: 12 param;            T=600ms
+		  - 40 param total, masurat Tparam<50ms ↑
+		  - mediere pe 5 valori -> T set valori = 2*5 = 10s
+		  - presupunand ~ 20% rateuri + reincercare: 12s
+		  - 3 reincercari: -0-20% erori:   12s
+				   -20-100% erori: 12-30s
 
-metrics_inserter: - Tinserare=5s
-		  - mediere pe 5 valori -> T set valori = 1s
-                  - 4 contoare -> T set param contor = 250ms
-		  - 1 DMED121: 4 param;        T=100ms
-                  - 3 trifazat: 12 param;      T=300ms
-		  - 40 param total -> Tparam=25ms ↑, 3 reincercari T=8.(3)ms
+Măsurătorile sunt grupate în "seturi", după dispozitiv. Toate cele 40 se fac în ordine, apoi se așteaptă
+până la 12s pentru o inserare uniformă ca timp. Un set de măsurători este inserat după ce a înregistrat
+5 seturi de valori mediate. În caz de eroare, fiecare interogare are 3 încercări, iar dacă acestea cedează,
+se șterge setul curent și numărul de seturi de valori mediate până atunci.
+
+
+Modbus_slave5:
+-memory:
+  -registers:
+	-0 RL[7:0]_RL[15:8]
+	-1 PINC_0xFF
+
+-request examples:
+:0506 0000 FFFFF7    -RL[7:0]_[15:8] all open (NC output), 1 on the switch
+:0506 0000 0000F5    -RL[7:0]_[15:8] all powered (open output), 0 on the switch
+
+:0504 0001 0001F5    :0504 0002 --00 --    - POWCON[7:0], 1/0 current/no current

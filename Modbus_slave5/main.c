@@ -5,8 +5,8 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : Modbus_slave5
-Version : 0.95
-Date    : 3.03.2023
+Version : 1.0
+Date    : 15.03.2023
 Author  : popag93
 Company : 
 Comments: listens for Modbus queries on USART0,
@@ -327,8 +327,8 @@ void senderr(flash const char *error)
         putchar0(*ct);
     return;
 }
-inline void sendrsp()
-{
+void sendrsp()    //non deterministic behavior if I make it inline occurs
+{                 //for :050400010001F5 and some :0506 requests
     transceiver_datadir=1;
     LED1=1;
     for(ct=rsp; *ct; ct++)
@@ -340,13 +340,12 @@ inline void sendrsp()
 }
 
 
-char msg[24], Nmsg;                  //Nmsg - msg[] after last element index (==length)
-char LRC, i=0, slave_unit_addr;      //LRC - longitudinal checksum <=> checksum8 2's complement
-char listen_validate_activate()        //returns: 0 if RL70|RL158 write, 1 if RL2316 write,
-{                             //         2 if another unit_addr, 5 if improper msg
-    static unsigned int RLaddr, RLval;
-    //char *rsp0;    //local variable for rsp
-    static unsigned int LRC_RX;
+char msg[24], Nmsg;                      //Nmsg - msg[] after last element index (==length)
+unsigned char LRC, i=0, slave_unit_addr;    //LRC - longitudinal checksum <=> checksum8 2's complement
+char modbusFunc04();    char modbusFunc06();
+char listen_validate_activate()             //returns: 0 if RL70|RL158 write, 2 if PINC read
+{                                           //         4 if another unit_addr, 5 if improper msg         
+    static int fctcode;
 
     
     do    //get first char only if ==':'
@@ -383,42 +382,84 @@ char listen_validate_activate()        //returns: 0 if RL70|RL158 write, 1 if RL
     //LED1=1;  delay_ms(10);  LED1=0;
     
     if(strncmpf(msg+1,"05",2))    //change to _SLAVE_UNIT_ADDR
-        return 2;
-    LRC = -slave_unit_addr;
-            
-    if(strncmpf(msg+3, "06", 2))
-        return 5;
-    LRC -= 6;
+        return 4;
     
-    sscanf(msg+5, "%4x %4x", &RLaddr,&RLval);    //RLaddr-word-16bit, RLval-word-16bit
-    LRC -= (RLaddr>>8) + RLaddr + (RLval>>8) + RLval;
+    sscanf(msg+3,"%2x",&fctcode);
+    switch(fctcode)
+    {
+    case 6:
+        if(modbusFunc06())
+            return 5;
+        return 0;
+        break;
+    case 4:
+        if(modbusFunc04())
+            return 5;
+        return 2;
+        break;
+    default:
+        return 5;
+    }
+}
+
+char modbusFunc06()
+{
+    static unsigned int RLval;
+    static unsigned int LRC_RX;
+    
+    LRC = -slave_unit_addr -6;
+    
+    if(strncmpf(msg+5, "0000", 4))
+        return 5;
+    
+    sscanf(msg+9, "%4x", &RLval);    //RLval-word-16bit
+    LRC -= (RLval>>8) + RLval;
     
     sscanf(msg+13, "%2x", &LRC_RX);
-            
-    //sscanf_2hhx(msg+13, &cr);
     if(LRC != LRC_RX)
     {
         senderr("#LRCfail");    // ! must remove from final project
         return 5;
     }
     
+    
+    PORTA = ~RLval>>8;
+    PORTB = ~RLval;    //PORTB = RLval&0xFF;
+    
+    sendrsp();        //ACK with same msg
     #asm("wdr");
     
+    return 0;
+}
+char modbusFunc04()
+{
+    static unsigned char pinC;
+    static unsigned int LRC_RX;
     
-    switch(RLaddr)      //actuate relays
+    LRC = -slave_unit_addr -4;
+    
+    if(strncmpf(msg+5, "0001", 4))
+        return 5;
+    LRC -= 1;
+    if(strncmpf(msg+9, "0001", 4))
+        return 5;
+    LRC -= 1;
+    
+    sscanf(msg+13, "%2x", &LRC_RX);
+    if(LRC != LRC_RX)
     {
-    case 0:
-        PORTA = ~RLval>>8;
-        PORTB = ~RLval;    //PORTB = RLval&0xFF;
-        break;
-    case 1:
-        PORTC = ~RLval>>8;
-        break;
-    default:
+        senderr("LRCfail");
         return 5;
     }
-    sendrsp();        //ACK with same msg
-    return RLaddr;    //'\r' before last char test ignored
+    
+    
+    pinC = ~PINC;
+    LRC = -11 -pinC;
+    sprintf(rsp, ":05040002%02X00%02X\r\n", pinC,LRC);
+    sendrsp();
+    #asm("wdr");
+    
+    return 0;
 }
 
 void main(void)

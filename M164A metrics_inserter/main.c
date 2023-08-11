@@ -5,8 +5,8 @@ Automatic Program Generator
 http://www.hpinfotech.com
 
 Project : metrics_inserter_uC
-Version : 1.0
-Date    : 6.03.2023
+Version : 1.05
+Date    : 16.03.2023
 Author  : popag93
 Company : 
 Comments: queries the meter, computes mean on 5s from 5 values
@@ -365,7 +365,7 @@ interrupt [TIM1_COMPA] void timer1_compa_isr(void)
 
 
 // convention:  msg - Modbus request;    rsp - Modbus response
-char cr=0, *ct;
+unsigned char cr=0, *ct;
 char msg[40], errmsg[24];
 //struct DMED121 c1;                //measurement set for energymeter 1
 void senderr(flash const char *error)
@@ -393,10 +393,10 @@ void sendqry()    //make it inline if there's enough program memory
     return;
 }
 
-char rsp[64], Nrsp;    //Nrsp - rsp[] after last element index (==length)
-char LRC, i=0;    //LRC - longitudinal checksum <=> checksum8 2's complement
+char rsp[64], Nrsp;        //Nrsp - rsp[] after last element index (==length)
+unsigned char LRC, i=0;    //LRC - longitudinal checksum <=> checksum8 2's complement
 unsigned long int val;
-char ask_listen_validate(const unsigned char addr)
+char ask_listen_validate03(const unsigned char addr)
 {
     char *rsp0;    //local variable for rsp
 
@@ -497,7 +497,7 @@ char ask_listen_validate(const unsigned char addr)
     return 0;    //'\r' before last char test ignored
 }
 
-char ask_listen_validate2()
+char ask_listen_validate06()
 {
     char *rsp0;    //local variable for rsp
 
@@ -552,11 +552,87 @@ char ask_listen_validate2()
     return 0;
 }
 
+char ask_listen_validate04()
+{
+    unsigned int LRC_RX, portC;
+    char *rsp0;    //local variable for rsp
+
+    delay_ms(3);
+    start_timer0();
+    sendmsg();
+    
+            
+    while(!rx_counter1)    //wait first char, timeout time0
+        if(time0 == 125)
+        {
+            senderr("#fail1");
+            return 1;
+        }
+    cr=getchar1();
+    //putchar0(cr);    //uncomment for debug
+    *rsp=cr;
+    Nrsp=1;
+    while(cr!='\n')        //like Linux canonical serial com + timeout
+    {
+        if(time0 == 125)
+        {
+            senderr("#fail2");
+            return 1;
+        }
+        if(rx_counter1)
+        {
+            cr=getchar1();
+            //putchar0(cr);    //uncomment for debug
+            rsp[Nrsp++]=cr;
+        }
+    }
+    rsp[Nrsp++]='\0';
+    
+    while(rx_counter1)    getchar1();    //empty rx1 buffer
+    TCCR0B=0;    //stop_timer0();
+    #asm("wdr");
+    
+    for(i=0;  Nrsp-i>17 && rsp[i]!=':';  i++);    //ignore leading noise
+    if(Nrsp-i != 18)                              //without leading noise, 18B response expected (including '\0', begins with ':')
+    {
+        senderr("#fail3");
+        return 1;
+    }
+    rsp0=rsp+i;
+    
+    
+    if(strncmp(rsp0,msg,5))
+    {
+        senderr("#fail4");
+        return 1;
+    }
+    if(strncmpf(rsp0+5,"0002",4))
+    {
+        senderr("#fail4");
+        return 1;
+    }
+    
+    sscanf(rsp0+1,"%4x",&portC);
+    LRC = -(portC>>8) -portC -2;
+    sscanf(rsp0+9,"%4x",&portC);
+    LRC -= (portC>>8) +portC;
+    sscanf(rsp0+13,"%2x",&LRC_RX);
+    if(LRC != LRC_RX)
+    {
+        senderr("#LRCfail");
+        return 1;
+    }
+    
+    PORTC = portC>>8;
+
+    return 0;
+}
+
 void main(void)
 {
     unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0;
-    unsigned char pinA=255, pinB=255, pinC=255;    //stable, decided relay states
-    unsigned char pinAbak, pinBbak, pinCbak, LRC_TX;
+    unsigned char pinA=255, pinB=255;    //stable, decided relay states
+    unsigned char pinAbak, pinBbak, LRC_TX;
     unsigned int time1;
     struct DMED121 c1;                //measurement set for energymeter 1
     struct DMED301 c2, c3, c4;        //measurement sets for energymeters 2-4
@@ -579,7 +655,7 @@ param_set1:
         strcpyf(msg, ":010300070002F3\r\n");    //:010300070002F3\r\n
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(1))
+            if(!ask_listen_validate03(1))
             {
                 c1.I += val/5;
                 break;
@@ -601,7 +677,7 @@ failed_q1:      #asm("wdr");
         strcpyf(msg,":010300130002E7\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(1))
+            if(!ask_listen_validate03(1))
             {
                 c1.P += val/5;
                 break;
@@ -623,7 +699,7 @@ failed_q2:      #asm("wdr");
         strcpyf(msg,":010300190002E1\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(1))
+            if(!ask_listen_validate03(1))
             {
                 c1.Q += val/5;
                 break;
@@ -645,7 +721,7 @@ failed_q3:      #asm("wdr");
         strcpyf(msg,":010300010002F9\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(1))
+            if(!ask_listen_validate03(1))
             {
                 c1.V += val/5;
                 break;
@@ -682,7 +758,7 @@ param_set2:
         strcpyf(msg,":020300070002F2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.I1 += val/5;
                 break;
@@ -704,7 +780,7 @@ failed_q5:      #asm("wdr");
         strcpyf(msg,":020300090002F0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.I2 += val/5;
                 break;
@@ -726,7 +802,7 @@ failed_q6:      #asm("wdr");
         strcpyf(msg,":0203000B0002EE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.I3 += val/5;
                 break;
@@ -748,7 +824,7 @@ failed_q7:      #asm("wdr");
         strcpyf(msg,":020300130002E6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.P1 += val/5;
                 break;
@@ -770,7 +846,7 @@ failed_q8:      #asm("wdr");
         strcpyf(msg,":020300150002E4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.P2 += val/5;
                 break;
@@ -792,7 +868,7 @@ failed_q9:      #asm("wdr");
         strcpyf(msg,":020300170002E2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.P3 += val/5;
                 break;
@@ -814,7 +890,7 @@ failed_q10:     #asm("wdr");
         strcpyf(msg,":020300190002E0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.Q1 += val/5;
                 break;
@@ -836,7 +912,7 @@ failed_q11:     #asm("wdr");
         strcpyf(msg,":0203001B0002DE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.Q2 += val/5;
                 break;
@@ -858,7 +934,7 @@ failed_q12:     #asm("wdr");
         strcpyf(msg,":0203001D0002DC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.Q3 += val/5;
                 break;
@@ -880,7 +956,7 @@ failed_q13:     #asm("wdr");
         strcpyf(msg,":0203001F0002DA\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.S1 += val/5;
                 break;
@@ -902,7 +978,7 @@ failed_q14:     #asm("wdr");
         strcpyf(msg,":020300210002D8\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.S2 += val/5;
                 break;
@@ -924,7 +1000,7 @@ failed_q15:     #asm("wdr");
         strcpyf(msg,":020300230002D6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(2))
+            if(!ask_listen_validate03(2))
             {
                 c2.S3 += val/5;
                 break;
@@ -968,7 +1044,7 @@ param_set3:
         strcpyf(msg,":030300070002F1\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.I1 += val/5;
                 break;
@@ -990,7 +1066,7 @@ failed_q17:     #asm("wdr");
         strcpyf(msg,":030300090002EF\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.I2 += val/5;
                 break;
@@ -1012,7 +1088,7 @@ failed_q18:     #asm("wdr");
         strcpyf(msg,":0303000B0002ED\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.I3 += val/5;
                 break;
@@ -1034,7 +1110,7 @@ failed_q19:     #asm("wdr");
         strcpyf(msg,":030300130002E5\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.P1 += val/5;
                 break;
@@ -1056,7 +1132,7 @@ failed_q20:     #asm("wdr");
         strcpyf(msg,":030300150002E3\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.P2 += val/5;
                 break;
@@ -1078,7 +1154,7 @@ failed_q21:     #asm("wdr");
         strcpyf(msg,":030300170002E1\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.P3 += val/5;
                 break;
@@ -1100,7 +1176,7 @@ failed_q22:     #asm("wdr");
         strcpyf(msg,":030300190002DF\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.Q1 += val/5;
                 break;
@@ -1122,7 +1198,7 @@ failed_q23:     #asm("wdr");
         strcpyf(msg,":0303001B0002DD\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.Q2 += val/5;
                 break;
@@ -1144,7 +1220,7 @@ failed_q24:     #asm("wdr");
         strcpyf(msg,":0303001D0002DB\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.Q3 += val/5;
                 break;
@@ -1166,7 +1242,7 @@ failed_q25:     #asm("wdr");
         strcpyf(msg,":0303001F0002D9\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.S1 += val/5;
                 break;
@@ -1188,7 +1264,7 @@ failed_q26:     #asm("wdr");
         strcpyf(msg,":030300210002D7\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.S2 += val/5;
                 break;
@@ -1210,7 +1286,7 @@ failed_q27:     #asm("wdr");
         strcpyf(msg,":030300230002D5\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(3))
+            if(!ask_listen_validate03(3))
             {
                 c3.S3 += val/5;
                 break;
@@ -1254,7 +1330,7 @@ param_set4:
         strcpyf(msg,":040300070002F0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.I1 += val/5;
                 break;
@@ -1276,7 +1352,7 @@ failed_q29:     #asm("wdr");
         strcpyf(msg,":040300090002EE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.I2 += val/5;
                 break;
@@ -1298,7 +1374,7 @@ failed_q30:     #asm("wdr");
         strcpyf(msg,":0403000B0002EC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.I3 += val/5;
                 break;
@@ -1320,7 +1396,7 @@ failed_q31:     #asm("wdr");
         strcpyf(msg,":040300130002E4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.P1 += val/5;
                 break;
@@ -1342,7 +1418,7 @@ failed_q32:     #asm("wdr");
         strcpyf(msg,":040300150002E2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.P2 += val/5;
                 break;
@@ -1364,7 +1440,7 @@ failed_q33:     #asm("wdr");
         strcpyf(msg,":040300170002E0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.P3 += val/5;
                 break;
@@ -1386,7 +1462,7 @@ failed_q34:     #asm("wdr");
         strcpyf(msg,":040300190002DE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.Q1 += val/5;
                 break;
@@ -1408,7 +1484,7 @@ failed_q35:     #asm("wdr");
         strcpyf(msg,":0403001B0002DC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.Q2 += val/5;
                 break;
@@ -1430,7 +1506,7 @@ failed_q36:     #asm("wdr");
         strcpyf(msg,":0403001D0002DA\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.Q3 += val/5;
                 break;
@@ -1452,7 +1528,7 @@ failed_q37:     #asm("wdr");
         strcpyf(msg,":0403001F0002D8\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.S1 += val/5;
                 break;
@@ -1474,7 +1550,7 @@ failed_q38:     #asm("wdr");
         strcpyf(msg,":040300210002D6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.S2 += val/5;
                 break;
@@ -1496,7 +1572,7 @@ failed_q39:     #asm("wdr");
         strcpyf(msg,":040300230002D4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate(4))
+            if(!ask_listen_validate03(4))
             {
                 c4.S3 += val/5;
                 break;
@@ -1550,7 +1626,7 @@ set_relays:
                 
                 for(iretry=0; iretry<3; iretry++)
                 {
-                    if(!ask_listen_validate2())
+                    if(!ask_listen_validate06())
                         break;
                     else
                     {
@@ -1566,34 +1642,20 @@ failed_q41:             #asm("wdr");
                 }
             }
         }
-        if(pinC!=PINC)
-        {
-            delay_ms(30);    //debounce switch
         
-            if(pinC!=PINC)
+        strcpyf(msg,":050400010001F5\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate04())
+                break; 
+            else
             {
-                pinCbak=pinC;
-                pinC=PINC;
-                LRC_TX= -0x05 -0x06 -0x01 -pinC -0xFF;
-                sprintf(msg, ":05060001%02XFF%02X\r\n", pinC,LRC_TX);
-            
-                for(iretry=0; iretry<3; iretry++)
-                {
-                    if(!ask_listen_validate2())
-                        break;
-                    else
-                    {
-failed_q42:             #asm("wdr");
-                        senderr("#retry_q42\n");
-                    }
-                }
-                if(iretry==3)
-                {
-                    senderr("#failed_q42->c5_fail\n");
-                    pinC=pinCbak;    //revert changes
-                }
+failed_q42:     #asm("wdr");
+                senderr("#retry_q42\n");
             }
         }
+        if(iretry==3)
+            senderr("#failed_q42\n");
 
 end_acquisition_cycle:
         /*do
