@@ -18,11 +18,16 @@ se șterge setul curent și numărul de seturi de valori mediate până atunci.
 Modbus_slave5:
 -memory:
   -registers:
-	-0 RL[7:0]_RL[15:8]
-	-1 PINC_0xFF
+	-0 0x??_0b??_RL[5:0]      PORTB[5:0]
+	-1 0x000_POWCON[3:0]      PINC[3:0]
+        -4 A-IN4                  PORTC.4
+        -5 A-IN5                  PORTC.5
 
 -request examples:
-:0506 0000 FFFFF7    -RL[7:0]_[15:8] all open (NC output), 1 on the switch
-:0506 0000 0000F5    -RL[7:0]_[15:8] all powered (open output), 0 on the switch
+:0506 0000 003FB6    -RL[5:0] all open (NC output), 1 on the switch
+:0506 0000 0000F5    -RL[5:0] all powered (open output), 0 on the switch
 
-:0504 0001 0001F5    :0504 0002 --00 --    - POWCON[7:0], 1/0 current/no current
+:0504 0001 0001F5    :0504 0002 000- --    - POWCON[3:0], 1/0 current/no current
+
+:0504 0004 0001F2    :0504 0002 0--- --    - A-IN4 10bit unsigned int (right aligned)
+:0504 0005 0001F1    :0504 0002 0--- --    - A-IN5 10bit unsigned int (right aligned)

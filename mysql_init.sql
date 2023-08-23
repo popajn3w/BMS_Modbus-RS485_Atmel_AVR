@@ -2,6 +2,9 @@ DROP DATABASE IF EXISTS EnergyMeter_metrics;
 CREATE DATABASE EnergyMeter_metrics;
 USE EnergyMeter_metrics;
 
+DROP USER IF EXISTS 'testuser1'@'localhost', 'testuser2'@'192.168.0.101',
+'metricinserter'@'localhost', 'grafanauser'@'localhost';
+
 CREATE USER 'testuser1'@'localhost' IDENTIFIED BY 'maisuchili';
 GRANT ALL ON *.* TO 'testuser1'@'localhost';
 
@@ -76,6 +79,13 @@ CREATE TABLE triphase4(
 	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE slave_unit5(
+	id SMALLINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+	ain4 DECIMAL(7,6) NOT NULL,
+	ain5 DECIMAL(7,6) NOT NULL,
+	time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 
 DELIMITER //
 CREATE PROCEDURE insert_em1(IN I DECIMAL(13,3), IN Pa DECIMAL(12,2), IN Q DECIMAL(12,2), IN V DECIMAL(12,2))
@@ -125,6 +135,14 @@ BEGIN
 	(I1/10000, I2/10000, I3/10000, Pa1/100, Pa2/100, Pa3/100,
 	Q1/100, Q2/100, Q3/100, S1/100, S2/100, S3/100);
 	DELETE FROM triphase4 WHERE id = LAST_INSERT_ID() -50;
+END//
+DELIMITER ;
+
+DELIMITER //
+CREATE PROCEDURE insert_slave5(IN a4 DECIMAL(11,6), IN a5 DECIMAL(11,6))
+BEGIN
+	INSERT INTO slave_unit5 (ain4,ain5) VALUES (a4*5/1024, a5*5/1024);
+	DELETE FROM slave_unit5 WHERE id = LAST_INSERT_ID() -50;
 END//
 DELIMITER ;
 

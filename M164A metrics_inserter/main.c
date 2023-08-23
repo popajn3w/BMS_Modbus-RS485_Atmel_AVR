@@ -1,18 +1,18 @@
 /*******************************************************
-This program was created by the CodeWizardAVR V3.37 
+This program was created by the CodeWizardAVR V3.37
 Automatic Program Generator
 © Copyright 1998-2019 Pavel Haiduc, HP InfoTech s.r.l.
 http://www.hpinfotech.com
 
 Project : metrics_inserter_uC
-Version : 1.05
-Date    : 16.03.2023
+Version : 1.06
+Date    : 23.05.2023
 Author  : popag93
-Company : 
+Company :
 Comments: queries the meter, computes mean on 5s from 5 values
           and sends MySQL queries on USART0 to insert metrics;
           queries the custom Modbus slave to actuate the relays
-          according to the switches
+          according to the switches and get analog inputs
 
 Chip type               : ATmega164A
 Program type            : Application
@@ -54,7 +54,7 @@ void sscanf_2hhx(char *s, char *d)    //call this instead of sscanf(s, "%2hhx", 
         return;
     if(hextable[s[1]]!=-1)
         *d += hextable[s[1]];
-    
+
     return;
 }
 
@@ -305,6 +305,7 @@ void putchar1(char c)
 //************************* END SERIAL STUFF (USART1) *********************************************
 //*************************************************************************************************
 
+volatile unsigned char pinA;    //stable, decided relay states
 struct DMED121{
     // long int in CVAVR C Compiler is int32_t, int is int16_t
     unsigned long int I;
@@ -326,8 +327,14 @@ struct DMED301{
     unsigned long int S2;
     unsigned long int S3;
 };
+struct Slave05{
+    unsigned int powcon;
+    unsigned int ain4;
+    unsigned int ain5;
+};
 
-volatile char time0;    //time0 sw timer - 125 steps; hw timer 125 steps, 64 prescaler -> 64/20000*125*125=50ms
+#define SW_OCR0 124
+volatile unsigned char time0;    //time0 sw timer - 125 steps; hw timer 125 steps, 64 prescaler -> 64/20000*125*125=50ms
 inline void start_timer0()
 {
     time0=0;
@@ -341,7 +348,7 @@ inline void stop_timer0()
 // Timer 0 output compare A interrupt service routine
 interrupt [TIM0_COMPA] void timer0_compa_isr(void)
 {
-    if(time0<125)
+    if(time0<SW_OCR0)
         time0++;
     else
         TCCR0B=0;
@@ -363,6 +370,22 @@ interrupt [TIM1_COMPA] void timer1_compa_isr(void)
     TCCR1B=0x00;    //stop timer
 }
 
+volatile unsigned char time2=0;    //time2 sw timer - 10 steps; hw timer 250 steps, 256 prescaler -> 256/20000*250*10=32ms
+interrupt [TIM2_COMPA] void timer2_compa_isr(void)
+{
+    if(time2++ >=9)
+    {
+        TCCR2B=0;
+        pinA=PINA;
+    }
+}
+
+interrupt [PC_INT0] void pin_change_isr0(void)
+{
+    TCCR2B=0b110;
+    time2=0;
+}
+
 
 // convention:  msg - Modbus request;    rsp - Modbus response
 unsigned char cr=0, *ct;
@@ -375,7 +398,7 @@ void senderr(flash const char *error)
         putchar0(*ct);
     return;
 }
-inline void sendmsg()
+void sendmsg()
 {
     transceiver_datadir=1;
     LED1=1;
@@ -403,10 +426,10 @@ char ask_listen_validate03(const unsigned char addr)
     delay_ms(3);
     start_timer0();
     sendmsg();
-    
-            
+
+
     while(!rx_counter1)    //wait first char, timeout time0
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail1");
             return 1;
@@ -417,7 +440,7 @@ char ask_listen_validate03(const unsigned char addr)
     Nrsp=1;
     while(cr!='\n')        //like Linux canonical serial com + timeout
     {
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail2");
             return 1;
@@ -430,12 +453,12 @@ char ask_listen_validate03(const unsigned char addr)
         }
     }
     rsp[Nrsp++]='\0';
-    
+
     while(rx_counter1)    getchar1();    //empty rx1 buffer
     TCCR0B=0;    //stop_timer0();
     #asm("wdr");
-    
-    
+
+
     for(i=0;  Nrsp-i>19 && rsp[i]!=':';  i++);    //ignore leading noise
     if(Nrsp-i != 20)                              //without leading noise, 20B response expected (including '\0', begins with ':')
     {
@@ -443,7 +466,7 @@ char ask_listen_validate03(const unsigned char addr)
         return 1;
     }
     rsp0=rsp+i;
-    
+
     switch(addr)
     {
     case 1:
@@ -478,21 +501,21 @@ char ask_listen_validate03(const unsigned char addr)
         return 1;
     }
     LRC = -addr;
-            
+
     if(strncmpf(rsp0+3, "0304", 4))
         return 1;
     LRC -= 7;
-            
+
     sscanf(rsp0+7,"%8lx",&val);
     LRC -= (val>>24) + (val>>16) + (val>>8) + val;
-            
+
     sscanf_2hhx(rsp0+15, &cr);
     if(LRC != cr)
     {
         senderr("#LRCfail");
         return 1;
     }
-    
+
     #asm("wdr");
     return 0;    //'\r' before last char test ignored
 }
@@ -504,10 +527,10 @@ char ask_listen_validate06()
     delay_ms(3);
     start_timer0();
     sendmsg();
-    
-            
+
+
     while(!rx_counter1)    //wait first char, timeout time0
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail1");
             return 1;
@@ -518,7 +541,7 @@ char ask_listen_validate06()
     Nrsp=1;
     while(cr!='\n')        //like Linux canonical serial com + timeout
     {
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail2");
             return 1;
@@ -531,11 +554,12 @@ char ask_listen_validate06()
         }
     }
     rsp[Nrsp++]='\0';
-    
+
     while(rx_counter1)    getchar1();    //empty rx1 buffer
     TCCR0B=0;    //stop_timer0();
     #asm("wdr");
-    
+
+
     for(i=0;  Nrsp-i>17 && rsp[i]!=':';  i++);    //ignore leading noise
     if(Nrsp-i != 18)                              //without leading noise, 18B response expected (including '\0', begins with ':')
     {
@@ -543,7 +567,7 @@ char ask_listen_validate06()
         return 1;
     }
     rsp0=rsp+i;
-    
+
     if(strncmp(msg,rsp0,17))
     {
         senderr("#fail5");
@@ -552,18 +576,18 @@ char ask_listen_validate06()
     return 0;
 }
 
-char ask_listen_validate04()
+unsigned int ask_listen_validate04(unsigned int* pval)
 {
-    unsigned int LRC_RX, portC;
+    unsigned int LRC_RX, RXval;
     char *rsp0;    //local variable for rsp
 
     delay_ms(3);
     start_timer0();
     sendmsg();
-    
-            
+
+
     while(!rx_counter1)    //wait first char, timeout time0
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail1");
             return 1;
@@ -574,7 +598,7 @@ char ask_listen_validate04()
     Nrsp=1;
     while(cr!='\n')        //like Linux canonical serial com + timeout
     {
-        if(time0 == 125)
+        if(time0 == SW_OCR0)
         {
             senderr("#fail2");
             return 1;
@@ -587,11 +611,11 @@ char ask_listen_validate04()
         }
     }
     rsp[Nrsp++]='\0';
-    
+
     while(rx_counter1)    getchar1();    //empty rx1 buffer
     TCCR0B=0;    //stop_timer0();
     #asm("wdr");
-    
+
     for(i=0;  Nrsp-i>17 && rsp[i]!=':';  i++);    //ignore leading noise
     if(Nrsp-i != 18)                              //without leading noise, 18B response expected (including '\0', begins with ':')
     {
@@ -599,8 +623,8 @@ char ask_listen_validate04()
         return 1;
     }
     rsp0=rsp+i;
-    
-    
+
+
     if(strncmp(rsp0,msg,5))
     {
         senderr("#fail4");
@@ -611,47 +635,48 @@ char ask_listen_validate04()
         senderr("#fail4");
         return 1;
     }
-    
-    sscanf(rsp0+1,"%4x",&portC);
-    LRC = -(portC>>8) -portC -2;
-    sscanf(rsp0+9,"%4x",&portC);
-    LRC -= (portC>>8) +portC;
+
+    sscanf(rsp0+1,"%4x",&RXval);    //unit addr, Modbus fct
+    LRC = -(RXval>>8) -RXval -2;
+    sscanf(rsp0+9,"%4x",&RXval);    //value of input register
+    LRC -= (RXval>>8) +RXval;
     sscanf(rsp0+13,"%2x",&LRC_RX);
     if(LRC != LRC_RX)
     {
         senderr("#LRCfail");
         return 1;
     }
-    
-    PORTC = portC>>8;
-
+    //else everything alright, store RXval
+    *pval=RXval;
     return 0;
 }
 
 void main(void)
 {
-    unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0;
-    unsigned char pinA=255, pinB=255;    //stable, decided relay states
-    unsigned char pinAbak, pinBbak, LRC_TX;
-    unsigned int time1;
+    unsigned char iretry, ic1=0, ic2=0, ic3=0, ic4=0, is5;
+    unsigned char pinAbak=255, pinAreq, LRC_TX;    //known set relay states, temp value to request
+    unsigned int time1, retval;
     struct DMED121 c1;                //measurement set for energymeter 1
     struct DMED301 c2, c3, c4;        //measurement sets for energymeters 2-4
-    
+    struct Slave05 s5;
+
     initController();
+    pinA=PINA;
     memset(&c1, 0, sizeof(struct DMED121));
     memset(&c2, 0, sizeof(struct DMED301));
     memset(&c3, 0, sizeof(struct DMED301));
     memset(&c4, 0, sizeof(struct DMED301));
-    
+    memset(&s5, 0, sizeof(struct Slave05));
+
     // Globally enable interrupts
     #asm("sei")
     senderr("#reset\r\n");
     while (1)
     {
-    
+
 param_set1:
         start_timer1();
-        #asm("wdr");        
+        #asm("wdr");
         strcpyf(msg, ":010300070002F3\r\n");    //:010300070002F3\r\n
         for(iretry=0; iretry<3; iretry++)
         {
@@ -659,7 +684,7 @@ param_set1:
             {
                 c1.I += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q1:      #asm("wdr");
@@ -673,7 +698,7 @@ failed_q1:      #asm("wdr");
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
             goto param_set2;
         }
-        
+
         strcpyf(msg,":010300130002E7\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -681,7 +706,7 @@ failed_q1:      #asm("wdr");
             {
                 c1.P += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q2:      #asm("wdr");
@@ -695,7 +720,7 @@ failed_q2:      #asm("wdr");
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
             goto param_set2;
         }
-        
+
         strcpyf(msg,":010300190002E1\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -703,7 +728,7 @@ failed_q2:      #asm("wdr");
             {
                 c1.Q += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q3:      #asm("wdr");
@@ -717,7 +742,7 @@ failed_q3:      #asm("wdr");
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
             goto param_set2;
         }
-        
+
         strcpyf(msg,":010300010002F9\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -725,7 +750,7 @@ failed_q3:      #asm("wdr");
             {
                 c1.V += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q4:      #asm("wdr");
@@ -739,8 +764,8 @@ failed_q4:      #asm("wdr");
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
             goto param_set2;
         }
-        
-        
+
+
         if(++ic1==5)    // 5 values acquired, insert obtained mean
         {
             strcpyf(msg,"CALL insert_em1(");
@@ -751,9 +776,9 @@ failed_q4:      #asm("wdr");
             ic1=0;
             memset(&c1,0,sizeof(struct DMED121));    //clear param_set
         }
-        
-        
-        
+
+
+
 param_set2:
         strcpyf(msg,":020300070002F2\r\n");
         for(iretry=0; iretry<3; iretry++)
@@ -762,7 +787,7 @@ param_set2:
             {
                 c2.I1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q5:      #asm("wdr");
@@ -776,7 +801,7 @@ failed_q5:      #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300090002F0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -784,7 +809,7 @@ failed_q5:      #asm("wdr");
             {
                 c2.I2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q6:      #asm("wdr");
@@ -798,7 +823,7 @@ failed_q6:      #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":0203000B0002EE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -806,7 +831,7 @@ failed_q6:      #asm("wdr");
             {
                 c2.I3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q7:      #asm("wdr");
@@ -820,7 +845,7 @@ failed_q7:      #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300130002E6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -828,7 +853,7 @@ failed_q7:      #asm("wdr");
             {
                 c2.P1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q8:      #asm("wdr");
@@ -842,7 +867,7 @@ failed_q8:      #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300150002E4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -850,7 +875,7 @@ failed_q8:      #asm("wdr");
             {
                 c2.P2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q9:      #asm("wdr");
@@ -864,7 +889,7 @@ failed_q9:      #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300170002E2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -872,7 +897,7 @@ failed_q9:      #asm("wdr");
             {
                 c2.P3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q10:     #asm("wdr");
@@ -886,7 +911,7 @@ failed_q10:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300190002E0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -894,7 +919,7 @@ failed_q10:     #asm("wdr");
             {
                 c2.Q1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q11:     #asm("wdr");
@@ -908,7 +933,7 @@ failed_q11:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":0203001B0002DE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -916,7 +941,7 @@ failed_q11:     #asm("wdr");
             {
                 c2.Q2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q12:     #asm("wdr");
@@ -930,7 +955,7 @@ failed_q12:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":0203001D0002DC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -938,7 +963,7 @@ failed_q12:     #asm("wdr");
             {
                 c2.Q3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q13:     #asm("wdr");
@@ -952,7 +977,7 @@ failed_q13:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":0203001F0002DA\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -960,7 +985,7 @@ failed_q13:     #asm("wdr");
             {
                 c2.S1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q14:     #asm("wdr");
@@ -974,7 +999,7 @@ failed_q14:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300210002D8\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -982,7 +1007,7 @@ failed_q14:     #asm("wdr");
             {
                 c2.S2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q15:     #asm("wdr");
@@ -996,7 +1021,7 @@ failed_q15:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
+
         strcpyf(msg,":020300230002D6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1004,7 +1029,7 @@ failed_q15:     #asm("wdr");
             {
                 c2.S3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q16:     #asm("wdr");
@@ -1018,9 +1043,9 @@ failed_q16:     #asm("wdr");
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
             goto param_set3;
         }
-        
-        
-        
+
+
+
         if(++ic2==5)    // 5 values acquired, insert obtained mean
         {
             sprintf(msg,"CALL insert_em2(%ld,%ld,", c2.I1, c2.I2);
@@ -1038,8 +1063,8 @@ failed_q16:     #asm("wdr");
             ic2=0;
             memset(&c2,0,sizeof(struct DMED301));    //clear param_set
         }
-        
-        
+
+
 param_set3:
         strcpyf(msg,":030300070002F1\r\n");
         for(iretry=0; iretry<3; iretry++)
@@ -1048,7 +1073,7 @@ param_set3:
             {
                 c3.I1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q17:     #asm("wdr");
@@ -1062,7 +1087,7 @@ failed_q17:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300090002EF\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1070,7 +1095,7 @@ failed_q17:     #asm("wdr");
             {
                 c3.I2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q18:     #asm("wdr");
@@ -1084,7 +1109,7 @@ failed_q18:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":0303000B0002ED\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1092,7 +1117,7 @@ failed_q18:     #asm("wdr");
             {
                 c3.I3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q19:     #asm("wdr");
@@ -1106,7 +1131,7 @@ failed_q19:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300130002E5\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1114,7 +1139,7 @@ failed_q19:     #asm("wdr");
             {
                 c3.P1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q20:     #asm("wdr");
@@ -1128,7 +1153,7 @@ failed_q20:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300150002E3\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1136,7 +1161,7 @@ failed_q20:     #asm("wdr");
             {
                 c3.P2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q21:     #asm("wdr");
@@ -1150,7 +1175,7 @@ failed_q21:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300170002E1\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1158,7 +1183,7 @@ failed_q21:     #asm("wdr");
             {
                 c3.P3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q22:     #asm("wdr");
@@ -1172,7 +1197,7 @@ failed_q22:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300190002DF\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1180,7 +1205,7 @@ failed_q22:     #asm("wdr");
             {
                 c3.Q1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q23:     #asm("wdr");
@@ -1194,7 +1219,7 @@ failed_q23:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":0303001B0002DD\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1202,7 +1227,7 @@ failed_q23:     #asm("wdr");
             {
                 c3.Q2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q24:     #asm("wdr");
@@ -1216,7 +1241,7 @@ failed_q24:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":0303001D0002DB\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1224,7 +1249,7 @@ failed_q24:     #asm("wdr");
             {
                 c3.Q3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q25:     #asm("wdr");
@@ -1238,7 +1263,7 @@ failed_q25:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":0303001F0002D9\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1246,7 +1271,7 @@ failed_q25:     #asm("wdr");
             {
                 c3.S1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q26:     #asm("wdr");
@@ -1260,7 +1285,7 @@ failed_q26:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300210002D7\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1268,7 +1293,7 @@ failed_q26:     #asm("wdr");
             {
                 c3.S2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q27:     #asm("wdr");
@@ -1282,7 +1307,7 @@ failed_q27:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
+
         strcpyf(msg,":030300230002D5\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1290,7 +1315,7 @@ failed_q27:     #asm("wdr");
             {
                 c3.S3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q28:     #asm("wdr");
@@ -1304,9 +1329,9 @@ failed_q28:     #asm("wdr");
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
             goto param_set4;
         }
-        
-        
-        
+
+
+
         if(++ic3==5)    // 5 values acquired, insert obtained mean
         {
             sprintf(msg,"CALL insert_em3(%ld,%ld,", c3.I1, c3.I2);
@@ -1324,8 +1349,8 @@ failed_q28:     #asm("wdr");
             ic3=0;
             memset(&c3,0,sizeof(struct DMED301));    //clear param_set
         }
-        
-        
+
+
 param_set4:
         strcpyf(msg,":040300070002F0\r\n");
         for(iretry=0; iretry<3; iretry++)
@@ -1334,7 +1359,7 @@ param_set4:
             {
                 c4.I1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q29:     #asm("wdr");
@@ -1348,7 +1373,7 @@ failed_q29:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300090002EE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1356,7 +1381,7 @@ failed_q29:     #asm("wdr");
             {
                 c4.I2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q30:     #asm("wdr");
@@ -1370,7 +1395,7 @@ failed_q30:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":0403000B0002EC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1378,7 +1403,7 @@ failed_q30:     #asm("wdr");
             {
                 c4.I3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q31:     #asm("wdr");
@@ -1392,7 +1417,7 @@ failed_q31:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300130002E4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1400,7 +1425,7 @@ failed_q31:     #asm("wdr");
             {
                 c4.P1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q32:     #asm("wdr");
@@ -1414,7 +1439,7 @@ failed_q32:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300150002E2\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1422,7 +1447,7 @@ failed_q32:     #asm("wdr");
             {
                 c4.P2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q33:     #asm("wdr");
@@ -1436,7 +1461,7 @@ failed_q33:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300170002E0\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1444,7 +1469,7 @@ failed_q33:     #asm("wdr");
             {
                 c4.P3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q34:     #asm("wdr");
@@ -1458,7 +1483,7 @@ failed_q34:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300190002DE\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1466,7 +1491,7 @@ failed_q34:     #asm("wdr");
             {
                 c4.Q1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q35:     #asm("wdr");
@@ -1480,7 +1505,7 @@ failed_q35:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":0403001B0002DC\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1488,7 +1513,7 @@ failed_q35:     #asm("wdr");
             {
                 c4.Q2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q36:     #asm("wdr");
@@ -1502,7 +1527,7 @@ failed_q36:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":0403001D0002DA\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1510,7 +1535,7 @@ failed_q36:     #asm("wdr");
             {
                 c4.Q3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q37:     #asm("wdr");
@@ -1524,7 +1549,7 @@ failed_q37:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":0403001F0002D8\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1532,7 +1557,7 @@ failed_q37:     #asm("wdr");
             {
                 c4.S1 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q38:     #asm("wdr");
@@ -1546,7 +1571,7 @@ failed_q38:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300210002D6\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1554,7 +1579,7 @@ failed_q38:     #asm("wdr");
             {
                 c4.S2 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q39:     #asm("wdr");
@@ -1568,7 +1593,7 @@ failed_q39:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
+
         strcpyf(msg,":040300230002D4\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
@@ -1576,7 +1601,7 @@ failed_q39:     #asm("wdr");
             {
                 c4.S3 += val/5;
                 break;
-            } 
+            }
             else
             {
 failed_q40:     #asm("wdr");
@@ -1590,8 +1615,8 @@ failed_q40:     #asm("wdr");
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
             goto set_relays;
         }
-        
-        
+
+
         if(++ic4==5)    // 5 values acquired, insert obtained mean
         {
             sprintf(msg,"CALL insert_em4(%ld,%ld,", c4.I1, c4.I2);
@@ -1609,45 +1634,36 @@ failed_q40:     #asm("wdr");
             ic4=0;
             memset(&c4,0,sizeof(struct DMED301));    //clear param_set
         }
-        
+
 set_relays:
-        if(pinA!=PINA || pinB!=PINB)
+        if(pinA!=pinAbak)
         {
-            delay_ms(30);    //debounce switch
-        
-            if(pinA!=PINA || pinB!=PINB)
+            pinAreq = pinA;
+            LRC_TX= -0x05 -0x06 -pinAreq;
+            sprintf(msg, ":0506000000%02X%02X\r\n", pinAreq,LRC_TX);
+
+            for(iretry=0; iretry<3; iretry++)
             {
-                pinAbak=pinA;
-                pinBbak=pinB;
-                pinA=PINA;
-                pinB=PINB;
-                LRC_TX= -0x05 -0x06 -pinA -pinB;
-                sprintf(msg, ":05060000%02X%02X%02X\r\n", pinA,pinB,LRC_TX);
-                
-                for(iretry=0; iretry<3; iretry++)
+                if(!ask_listen_validate06())
+                    break;
+                else
                 {
-                    if(!ask_listen_validate06())
-                        break;
-                    else
-                    {
-failed_q41:             #asm("wdr");
-                        senderr("#retry_q41\n");
-                    }
-                }
-                if(iretry==3)
-                {
-                    senderr("#failed_q41->c5_fail\n");
-                    pinA=pinAbak;    //revert changes
-                    pinB=pinBbak;
+failed_q41:         #asm("wdr");
+                    senderr("#retry_q41\n");
                 }
             }
+            if(iretry==3)
+                senderr("#failed_q41\n");
+            else
+                pinAbak=pinAreq;
         }
-        
+
+slave05_params:
         strcpyf(msg,":050400010001F5\r\n");
         for(iretry=0; iretry<3; iretry++)
         {
-            if(!ask_listen_validate04())
-                break; 
+            if(!ask_listen_validate04(&s5.powcon))
+                break;
             else
             {
 failed_q42:     #asm("wdr");
@@ -1656,6 +1672,64 @@ failed_q42:     #asm("wdr");
         }
         if(iretry==3)
             senderr("#failed_q42\n");
+        else
+            PORTC=s5.powcon;
+
+        strcpyf(msg,":050400040001F2\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate04(&retval))
+            {
+                s5.ain4 += retval/5;
+                break;
+            }
+            else
+            {
+failed_q43:     #asm("wdr");
+                senderr("#retry_q43\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q43->s5_fail\n");
+            is5=0;
+            memset(&s5,0,sizeof(struct Slave05));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+
+        strcpyf(msg,":050400050001F1\r\n");
+        for(iretry=0; iretry<3; iretry++)
+        {
+            if(!ask_listen_validate04(&retval))
+            {
+                s5.ain5 += retval/5;
+                break;
+            }
+            else
+            {
+failed_q44:     #asm("wdr");
+                senderr("#retry_q44\n");
+            }
+        }
+        if(iretry==3)
+        {
+            senderr("#failed_q44->s5_fail\n");
+            is5=0;
+            memset(&s5,0,sizeof(struct Slave05));    //clear param_set
+            goto end_acquisition_cycle;
+        }
+
+        if(++is5==5)    // 5 values acquired, insert obtained mean
+        {
+            sprintf(msg,"CALL insert_slave5(%d,", s5.ain4);
+            sendqry();
+            #asm("wdr");
+            sprintf(msg,"%d);\n", s5.ain5);
+            sendqry();
+            #asm("wdr");
+            is5=0;
+            memset(&s5,0,sizeof(struct Slave05));    //clear param_set
+        }
 
 end_acquisition_cycle:
         /*do
@@ -1664,9 +1738,9 @@ end_acquisition_cycle:
             #asm("wdr");
         }
         while (time1 != 0xB71A);*/
-        while(time1= TCNT1L|(TCNT1H<<8),  time1 != 0xB71A)    #asm("wdr");    //param_set1...4 acquisition should take no less than 12s
-        //while(TCNT1L != OCR1AL  ||  TCNT1H != OCR1AH)    #asm("wdr");    //param_set1...4 acquisition should take no less than 12s
-        
+        while(time1= TCNT1L|(TCNT1H<<8),  time1 != 0xB71A)    #asm("wdr");    //param_set1...4+q41...q44 acquisition should take no less than 12s
+        //while(TCNT1L != OCR1AL  ||  TCNT1H != OCR1AH)    #asm("wdr");    //param_set1...4+q41...q44 acquisition should take no less than 12s
+
         if(rx_buffer_overflow1)
         {
             senderr("#RX1_buffer_overflow");

@@ -75,15 +75,16 @@ void initController()
 
     // Timer/Counter 2 initialization
     // Clock source: System Clock
-    // Clock value: Timer2 Stopped
-    // Mode: Normal top=0xFF
+    // Clock value: 78.125 kHz
+    // Mode: CTC top=OCR2A
     // OC2A output: Disconnected
     // OC2B output: Disconnected
+    // Timer Period: 3.2 ms
     ASSR=(0<<EXCLK) | (0<<AS2);
-    TCCR2A=(0<<COM2A1) | (0<<COM2A0) | (0<<COM2B1) | (0<<COM2B0) | (0<<WGM21) | (0<<WGM20);
-    TCCR2B=(0<<WGM22) | (0<<CS22) | (0<<CS21) | (0<<CS20);
+    TCCR2A=(0<<COM2A1) | (0<<COM2A0) | (0<<COM2B1) | (0<<COM2B0) | (1<<WGM21) | (0<<WGM20);
+    TCCR2B=(0<<WGM22) | (1<<CS22) | (1<<CS21) | (0<<CS20);        //TCCR2B=0b110;    //to start
     TCNT2=0x00;
-    OCR2A=0x00;
+    OCR2A=0xF9;
     OCR2B=0x00;
 
     // Timer/Counter 0 Interrupt(s) initialization
@@ -93,7 +94,7 @@ void initController()
     TIMSK1=(0<<ICIE1) | (0<<OCIE1B) | (1<<OCIE1A) | (0<<TOIE1);
 
     // Timer/Counter 2 Interrupt(s) initialization
-    TIMSK2=(0<<OCIE2B) | (0<<OCIE2A) | (0<<TOIE2);
+    TIMSK2=(0<<OCIE2B) | (1<<OCIE2A) | (0<<TOIE2);
 
     // External Interrupt(s) initialization
     // INT0: Off
@@ -105,7 +106,9 @@ void initController()
     // Interrupt on any change on pins PCINT24-31: On
     EICRA=(0<<ISC21) | (0<<ISC20) | (0<<ISC11) | (0<<ISC10) | (0<<ISC01) | (0<<ISC00);
     EIMSK=(0<<INT2) | (0<<INT1) | (0<<INT0);
-    PCICR=(0<<PCIE3) | (0<<PCIE2) | (0<<PCIE1) | (0<<PCIE0);
+    PCMSK0=(1<<PCINT7) | (1<<PCINT6) | (1<<PCINT5) | (1<<PCINT4) | (1<<PCINT3) | (1<<PCINT2) | (1<<PCINT1) | (1<<PCINT0);
+    PCICR=(0<<PCIE3) | (0<<PCIE2) | (0<<PCIE1) | (1<<PCIE0);
+    PCIFR=(0<<PCIF3) | (0<<PCIF2) | (0<<PCIF1) | (1<<PCIF0);
 
     // USART0 initialization
     // Communication Parameters: 8 Data, 1 Stop, No Parity

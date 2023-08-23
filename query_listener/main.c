@@ -10,6 +10,7 @@
 
 #include <mysql.h>
 #define DB_Nrecords 50
+#define _SERIAL_DEVICE_PATH "/dev/ttyUSB0"
 
 int fd_serialport;
 struct termios *poldtty;
@@ -97,7 +98,7 @@ int main()
         exit(3);
     }//}
     //{//connect to usbserial device, save config, set config, etc.
-    fd_serialport = open("/dev/ttyUSB0", O_RDWR);
+    fd_serialport = open(_SERIAL_DEVICE_PATH, O_RDWR);
     if(fd_serialport < 0)
     {
         fprintf(stderr,"Error %d from open: %s\n", errno, strerror(errno));
@@ -112,7 +113,7 @@ int main()
         exit(5);
     }
 
-    //load_termios(&oldtty);
+    //load_termios(&oldtty);    //uncomment to restore a saved config
     display_termios(&oldtty);
     save_termios(&oldtty);
 
@@ -153,6 +154,11 @@ int main()
         fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
         exit(4);
     }
+    if(mysql_query(con, "DELETE FROM slave_unit5"))
+    {
+        fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+        exit(4);
+    }
 
 
     for(num_bytes=0; num_bytes<DB_Nrecords; num_bytes++)
@@ -188,6 +194,14 @@ int main()
         if(mysql_query(con, "INSERT INTO triphase4 (current1,current2,current3,Pactive1,Pactive2,Pactive3,"
                        "Preactive1,Preactive2,Preactive3,Papparent1,Papparent2,Papparent3) "
                        "VALUES (0,0,0,0,0,0,0,0,0,0,0,0)"))
+        {
+            fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
+            exit(4);
+        }
+    }
+    for(num_bytes=0; num_bytes<DB_Nrecords; num_bytes++)
+    {
+        if(mysql_query(con, "INSERT INTO slave_unit5 (ain4,ain5) VALUES (0,0)"))
         {
             fprintf(stderr, "couldn't query: error: %s", mysql_error(con));
             exit(4);

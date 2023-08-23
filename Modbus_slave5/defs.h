@@ -2,12 +2,7 @@
 #define NULL 0
 #endif
 
-#define transceiver_datadir PORTD.4    //0: driver disable + receiver enable, 1: driver enable + receiver disable
-#define KEY PIND.5
-#define LED1 PORTD.6
-#define PROBEtoLED PORTD.7
-#define RL70 PORTA
-#define RL158 PORTB
-#define RL2316 PORTC
+#define transceiver_datadir PORTD.2    //0: driver disable + receiver enable, 1: driver enable + receiver disable
+#define LED1 PORTD.4
 
-#define _SLAVE_UNIT_ADDR 05
+#define _SLAVE_UNIT_ADDR "05"    //hex representation
